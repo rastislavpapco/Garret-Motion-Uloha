@@ -1,7 +1,7 @@
 import json
 import math
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import StringIO
 
 
@@ -93,7 +93,7 @@ class Calculator:
 
         return cost
 
-    def _calculate_same_day(self, call_start: datetime, call_end: datetime) -> float:
+    def _calculate_same_day(self, call_start: datetime, call_end: datetime, call_length_secs: int) -> float:
         """
         Calculate cost of a phone call during the same day.
 
@@ -105,16 +105,13 @@ class Calculator:
                                                             year=call_start.year)
         self.primetime_end = self.primetime_end.replace(day=call_start.day, month=call_start.month,
                                                         year=call_start.year)
-        call_length_secs = (call_end - call_start).seconds - 1
 
         # Call started before primetime
         if call_start < self.primetime_start:
             cost = self._calculate_call_started_before_primetime(call_start, call_end, call_length_secs)
-
         # Call started during primetime
         elif call_start < self.primetime_end:
             cost = self._calculate_call_started_during_primetime(call_start, call_end, call_length_secs)
-
         # Call started and ended after primetime
         else:
             cost = math.ceil(call_length_secs / 60) * self.other_rate
@@ -129,10 +126,21 @@ class Calculator:
         :param call_end: Datetime of call's end.
         :return: Cost of the call.
         """
-        call_start_midnight = call_start.replace(hour=23, minute=59, second=59)
-        call_end_midnight = call_end.replace(hour=0, minute=0, second=0)
-        first_day_cost = self._calculate_same_day(call_start, call_start_midnight)
-        second_day_cost = self._calculate_same_day(call_end_midnight, call_end)
+        first_day_end = call_end.replace(hour=0, minute=0, second=0)
+        first_day_call_length_secs = (first_day_end - call_start).seconds
+        first_day_last_minute_remaining_seconds = (60 - (first_day_call_length_secs % 60)) % 60
+
+        # Minute can span across midnight - don't count it twice (in each day)
+        second_day_start = call_end.replace(hour=0, minute=0, second=first_day_last_minute_remaining_seconds)
+        second_day_call_length_secs = (call_end - second_day_start).seconds - 1
+
+        first_day_cost = self._calculate_same_day(call_start, first_day_end, first_day_call_length_secs)
+        # No new minute starts in second day
+        if call_end < second_day_start:
+            second_day_cost = 0
+        # The call continues in second day (more started minutes)
+        else:
+            second_day_cost = self._calculate_same_day(second_day_start, call_end, second_day_call_length_secs)
 
         return first_day_cost + second_day_cost
 
@@ -155,15 +163,25 @@ class Calculator:
         if call_end < call_start:
             raise AttributeError("Call end date is earlier than call start date.")
 
+        call_length_secs = (call_end - call_start).seconds - 1
+        # Solve calls of length 0 seconds
+        call_length_secs = max(call_length_secs, 1)
+        # Real end of the call might be overtime
+        real_call_end = call_end
+
+        if call_length_secs > self.overtime_limit_seconds:
+            # End of regular call time (no overtime)
+            call_end = call_start + timedelta(seconds=self.overtime_limit_seconds)
+            call_length_secs = self.overtime_limit_seconds
+
         if call_start.day == call_end.day:
-            cost = self._calculate_same_day(call_start, call_end)
+            cost = self._calculate_same_day(call_start, call_end, call_length_secs)
         else:
             cost = self._calculate_different_days(call_start, call_end)
 
         # Overtime charges
-        call_length_secs = (call_end - call_start).seconds - 1
-        overtime = max(call_length_secs - self.overtime_limit_seconds, 0)
-        overtime_cost = math.ceil(overtime / 60) * self.overtime_rate
+        overtime_call_length_secs = (real_call_end - call_end).seconds - 1
+        overtime_cost = math.ceil(overtime_call_length_secs / 60) * self.overtime_rate
         cost += overtime_cost
 
         return cost
