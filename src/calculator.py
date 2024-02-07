@@ -186,7 +186,7 @@ class Calculator:
 
         return cost
 
-    def calculate(self, csv_str: str) -> [float]:
+    def calculate(self, csv_str: str) -> list[float]:
         """
         Calculates costs of all phone calls from data provided via csv file.
 
